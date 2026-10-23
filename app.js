@@ -1,6 +1,6 @@
 /* Zählerablesung Burgkemnitzer Straße 6 – lokale PWA, Daten bleiben auf dem Gerät */
 'use strict';
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.1';
 const HEIZ = 'Heizung';
 const ICON = { 'Wasser': '💧', 'Wärme': '🔥', 'Strom': '⚡', 'Heizöl': '🛢️' };
 const ART_ORDER = ['Wasser', 'Wärme', 'Strom', 'Heizöl'];
