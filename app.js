@@ -1,6 +1,7 @@
 /* Zählerablesung Burgkemnitzer Straße 6 – lokale PWA, Daten bleiben auf dem Gerät */
 'use strict';
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
+const HEIZ = 'Heizung';
 const ICON = { 'Wasser': '💧', 'Wärme': '🔥', 'Strom': '⚡', 'Heizöl': '🛢️' };
 const ART_ORDER = ['Wasser', 'Wärme', 'Strom', 'Heizöl'];
 
@@ -128,7 +129,7 @@ function go(t, arg) {
     document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
   }
   window.scrollTo(0, 0);
-  ({ rundgang: vRundgang, ablesen: vAblesen, verlauf: vVerlauf, export: vExport, zaehler: vZaehler, zaehlerEdit: vZaehlerEdit })[t](arg);
+  ({ rundgang: vRundgang, ablesen: vAblesen, verlauf: vVerlauf, export: vExport, zaehler: vZaehler, zaehlerEdit: vZaehlerEdit, ereignis: vEreignis })[t](arg);
 }
 
 /* ---------- Ansicht: Rundgang ---------- */
@@ -145,7 +146,15 @@ async function vRundgang() {
   const am = activeMeters();
   const at = new Map(rs.filter(r => r.date === stichtag).map(r => [r.nr, r]));
   const done = am.filter(m => at.has(m.nr)).length;
+  const hz = rs.filter(r => r.nr === HEIZ).sort((a, b) => a.date.localeCompare(b.date));
+  const hl = hz[hz.length - 1];
+  const an = hl && hl.value === 1;
+  const hzText = hl ? `${an ? 'läuft seit' : 'aus seit'} ${deDate(hl.date)} (${days(hl.date, today())} Tage)` : 'noch nichts erfasst';
   let html = `<h1>Zählerstände</h1>
+    <div class="grp">Heizung · ${esc(hzText)}</div>
+    <div class="row" style="margin-top:0"><button class="btn ${an ? 'sec' : ''}" style="margin:0;width:auto" id="hz-ein">🔥 Heizung ein</button>
+      <button class="btn ${an ? '' : 'sec'}" style="margin:0;width:auto" id="hz-aus">⏻ Heizung aus</button></div>
+    <div class="row"><button class="btn sec" style="margin:0" id="tanken">🛢️ Heizöl getankt</button></div>
     <div class="row"><label class="field"><span class="lab">Stichtag (gilt für alle Ablesungen dieses Rundgangs)</span><input type="date" id="st" value="${stichtag}"></label></div>
     <div class="prog"><b>${done} / ${am.length}</b><div class="bar"><i style="width:${am.length ? done / am.length * 100 : 0}%"></i></div><span class="unit" style="font-size:12px">abgelesen</span></div>`;
   const groups = [...new Set(am.map(m => m.ort ? `${m.art} · ${m.ort}` : m.art))];
@@ -167,17 +176,20 @@ async function vRundgang() {
   }
   if (done === am.length && am.length) html += `<div class="hint ok">Alle Zähler abgelesen. Weiter im Tab „Export“.</div>`;
   view.innerHTML = html;
+  $('#hz-ein').onclick = () => go('ereignis', 'ein');
+  $('#hz-aus').onclick = () => go('ereignis', 'aus');
+  $('#tanken').onclick = () => go('ereignis', 'tanken');
   $('#st').onchange = async e => { stichtag = e.target.value || today(); await kvSet('stichtag', stichtag); vRundgang(); };
   view.querySelectorAll('.it').forEach(b => b.onclick = () => go('ablesen', { nr: b.dataset.nr }));
 }
 
 /* ---------- Ansicht: Ablesen ---------- */
-async function vAblesen({ nr, id }) {
+async function vAblesen({ nr, id, date: dIn, note: noteIn, hint }) {
   const rs = await allReadings();
-  let existing = id ? rs.find(r => r.id === id) : rs.find(r => r.nr === nr && r.date === stichtag);
+  let existing = id ? rs.find(r => r.id === id) : rs.find(r => r.nr === nr && r.date === (dIn || stichtag));
   const m = meters.find(x => x.nr === (existing ? existing.nr : nr));
   if (!m) return go('rundgang');
-  const date = existing ? existing.date : stichtag;
+  const date = existing ? existing.date : (dIn || stichtag);
   let blob = existing && existing.photo ? await getPhoto(existing.id) : null;
   let blobUrl = blob ? URL.createObjectURL(blob) : null;
   const s = seriesFor(m, rs, existing && existing.id).filter(p => p.date < date);
@@ -185,6 +197,7 @@ async function vAblesen({ nr, id }) {
   const view = $('#view');
   view.innerHTML = `<button class="back" id="bk">‹ Zurück</button>
     <h1>${esc(m.name || m.messstelle)}</h1><div class="sub">${esc(m.art)} · ${esc(m.nr)} · Messstelle ${esc(m.messstelle)}</div>
+    ${hint ? `<div class="hint ok">${esc(hint)}</div>` : ''}
     <div class="photo" id="ph">${blobUrl ? `<img src="${blobUrl}" alt="Foto">` : '📷 Foto aufnehmen'}
       <span class="ph-b">${blobUrl ? 'Neu aufnehmen' : 'Kamera'}</span>
       <input type="file" accept="image/*" capture="environment" id="cam"></div>
@@ -193,7 +206,7 @@ async function vAblesen({ nr, id }) {
     <div class="row"><div class="field"><span class="lab">Stichtag</span><b>${deDate(date)}</b></div>
       <div class="field"><span class="lab">Vorablesung</span><b>${last ? fmt(last.value) + ' · ' + deDate(last.date).slice(0, 6) : '–'}</b></div></div>
     <div id="chk"></div>
-    <div class="m"><label class="field"><span class="lab">Bemerkung (optional)</span><input id="note" value="${esc(existing ? existing.note : '')}" placeholder="z. B. Zählerwechsel, Schätzwert"></label></div>
+    <div class="m"><label class="field"><span class="lab">Bemerkung (optional)</span><input id="note" value="${esc(existing ? existing.note : (noteIn || ''))}" placeholder="z. B. Zählerwechsel, Schätzwert"></label></div>
     <div class="small" id="pn"></div>
     <button class="btn" id="save">Speichern &amp; nächster Zähler ›</button>
     ${existing ? '<button class="btn del" id="del">Ablesung löschen</button>' : ''}`;
@@ -234,6 +247,7 @@ async function vAblesen({ nr, id }) {
     if (blobUrl) URL.revokeObjectURL(blobUrl);
     toast(`${m.name || m.messstelle}: ${fmt(v)} ${m.einheit} gespeichert`);
     if (id) return go('verlauf');
+    if (dIn) return go('rundgang');
     const rs2 = await allReadings();
     const doneSet = new Set(rs2.filter(x => x.date === stichtag).map(x => x.nr));
     const am = activeMeters();
@@ -248,6 +262,40 @@ async function vAblesen({ nr, id }) {
   };
 }
 
+/* ---------- Ansicht: Ereignis (Heizung ein/aus, Tanken) ---------- */
+async function vEreignis(typ) {
+  const T = { ein: ['Heizung eingeschaltet', 'Zum Heizungsstart bitte den Tankinhalt ablesen.'],
+              aus: ['Heizung ausgeschaltet', 'Zum Heizungsende bitte den Tankinhalt ablesen.'],
+              tanken: ['Heizöl getankt', 'Bitte den Tankinhalt nach der Lieferung ablesen. Liefermenge und Preis kommen aus der Rechnung (Blatt Heizöl).'] }[typ];
+  const tank = activeMeters().find(m => m.art === 'Heizöl');
+  $('#view').innerHTML = `<button class="back" id="bk">‹ Zurück</button>
+    <h1>${T[0]}</h1><div class="sub">Datum erfassen, danach Tank ablesen</div>
+    <div class="row"><label class="field"><span class="lab">Datum</span><input type="date" id="ed" value="${today()}"></label></div>
+    ${typ === 'tanken' ? '<div class="m"><label class="field"><span class="lab">Liefermenge laut Lieferschein (optional, Liter)</span><input id="lm" inputmode="decimal" placeholder="z. B. 2500"></label></div>' : ''}
+    <div class="hint ok">${T[1]}</div>
+    <button class="btn" id="go">${tank ? 'Speichern & Tank ablesen ›' : 'Speichern'}</button>
+    ${tank ? '' : '<div class="small">Kein Tank-Zähler in der Zählerliste – bitte Zählerliste importieren.</div>'}`;
+  $('#bk').onclick = () => go('rundgang');
+  $('#go').onclick = async () => {
+    const d = $('#ed').value || today();
+    let note = T[0];
+    if (typ !== 'tanken') {
+      const rs = await allReadings();
+      const ex = rs.find(r => r.nr === HEIZ && r.date === d);
+      const r = ex || { nr: HEIZ, date: d, createdAt: new Date().toISOString() };
+      r.value = typ === 'ein' ? 1 : 0; r.note = T[0]; r.flag = ''; r.photo = ''; r.exported = false;
+      await putReading(r);
+      if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+    } else {
+      const lm = parseNum($('#lm').value);
+      note = isNaN(lm) ? 'nach Lieferung' : `nach Lieferung ${fmt(lm, 0)} L`;
+    }
+    toast(`${T[0]} am ${deDate(d)} gespeichert`);
+    if (tank) go('ablesen', { nr: tank.nr, date: d, note: typ === 'tanken' ? note : 'bei ' + T[0], hint: T[1] });
+    else go('rundgang');
+  };
+}
+
 /* ---------- Ansicht: Verlauf ---------- */
 async function vVerlauf() {
   const rs = (await allReadings()).sort((a, b) => b.date.localeCompare(a.date) || a.nr.localeCompare(b.nr));
@@ -258,6 +306,12 @@ async function vVerlauf() {
     const list = rs.filter(r => r.date === d);
     html += `<div class="grp">Stichtag ${deDate(d)} · ${list.length} Ablesungen</div><div class="card">`;
     for (const r of list) {
+      if (r.nr === HEIZ) {
+        html += `<button class="it" data-hz="${r.id}"><div class="ic Wärme">${r.value === 1 ? '🔥' : '⏻'}</div>
+          <div class="nm"><b>Heizung ${r.value === 1 ? 'eingeschaltet' : 'ausgeschaltet'}</b><span>Ereignis · antippen zum Löschen</span></div>
+          <div class="val"><b>${deDate(r.date)}</b>${r.exported ? 'exportiert' : 'neu'}</div></button>`;
+        continue;
+      }
       const m = meters.find(x => x.nr === r.nr) || { name: r.nr, einheit: '', art: '' };
       html += `<button class="it" data-id="${r.id}"><img class="thumb" data-ph="${r.photo ? r.id : ''}" alt="">
         <div class="nm"><b>${esc(m.name || m.messstelle)}</b><span>${esc(r.nr)}${r.flag ? ' · ⚠ ' + esc(r.flag) : ''}</span></div>
@@ -266,7 +320,11 @@ async function vVerlauf() {
     html += `</div>`;
   }
   view.innerHTML = html;
-  view.querySelectorAll('.it').forEach(b => b.onclick = () => go('ablesen', { id: Number(b.dataset.id) }));
+  view.querySelectorAll('.it[data-id]').forEach(b => b.onclick = () => go('ablesen', { id: Number(b.dataset.id) }));
+  view.querySelectorAll('.it[data-hz]').forEach(b => b.onclick = async () => {
+    if (!confirm('Diesen Heizungs-Eintrag löschen?')) return;
+    await delReading(Number(b.dataset.hz)); toast('Gelöscht'); vVerlauf();
+  });
   for (const im of view.querySelectorAll('img[data-ph]')) {
     if (!im.dataset.ph) { im.style.visibility = 'hidden'; continue; }
     const b = await getPhoto(Number(im.dataset.ph));
